@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Keno draw archive (regenerate with `python -m keno.cli fetch`)
+data/*
+!data/.gitkeep
