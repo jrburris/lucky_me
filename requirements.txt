@@ -1,3 +1,6 @@
 pandas>=2.0
 requests>=2.28
 streamlit>=1.35
+matplotlib>=3.8
+gspread>=6.0
+google-auth>=2.30

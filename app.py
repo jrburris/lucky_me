@@ -2,6 +2,8 @@
 fetch / analyze / backtest functions from the keno package."""
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 import streamlit as st
 
@@ -13,8 +15,6 @@ st.title("Keno")
 
 @st.cache_data
 def _load_draws():
-    if not storage.DEFAULT_PATH.exists():
-        return None
     df = storage.load_draws()
     return df if not df.empty else None
 
@@ -28,6 +28,19 @@ def _refresh():
     st.cache_data.clear()
 
 
+with st.sidebar:
+    st.header("Archive")
+    _sidebar_df = _load_draws()
+    if _sidebar_df is None:
+        st.caption("No draws collected yet.")
+    else:
+        days = sorted(storage.collected_days())
+        st.metric("Total draws", len(_sidebar_df))
+        st.metric("Days collected", len(days))
+        if days:
+            st.caption(f"{days[0].isoformat()} → {days[-1].isoformat()}")
+
+
 tab_data, tab_fetch, tab_analyze, tab_backtest = st.tabs(
     ["Data", "Fetch", "Analyze", "Backtest"]
 )
@@ -37,13 +50,17 @@ with tab_data:
     if df is None:
         st.info("No draws collected yet. Use the Fetch tab to pull some.")
     else:
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns([1, 1, 1])
         col1.metric("Draws", len(df))
         col2.metric("Date range", f"{df['drawTime'].min()} — {df['drawTime'].max()}")
+        export_df = df.assign(win=df["win"].apply(json.dumps))
+        col3.download_button(
+            "Download archive CSV", export_df.to_csv(index=False), file_name="draws.csv", mime="text/csv"
+        )
         st.dataframe(df, use_container_width=True, height=500)
 
 with tab_fetch:
-    st.write("Pull a day of draws from the Georgia Lottery API and add them to the local archive.")
+    st.write("Pull a day of draws from the Georgia Lottery API and add them to the Google Sheet archive.")
     day = st.date_input("Date")
     already_have = storage.existing_ids(day)
 
@@ -86,6 +103,17 @@ with tab_analyze:
 
         st.subheader("Number frequency")
         st.bar_chart(freq)
+
+        st.caption("Positional heatmap (1-80, left to right, top to bottom)")
+        grid = pd.DataFrame(
+            freq.values.reshape(8, 10),
+            index=[f"{r * 10 + 1}-{r * 10 + 10}" for r in range(8)],
+            columns=[str(c + 1) for c in range(10)],
+        )
+        st.dataframe(
+            grid.style.background_gradient(cmap="YlOrRd", axis=None),
+            use_container_width=True,
+        )
 
         c1, c2, c3 = st.columns(3)
         c1.write("**Most frequent**")

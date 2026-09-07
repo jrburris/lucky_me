@@ -30,7 +30,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     print(
         f"Added {len(missing)} new run(s) for {args.date.isoformat()} "
         f"({len(already_have)} were already collected). "
-        f"Archive now has {len(combined)} draws saved to {storage.DEFAULT_PATH}"
+        f"Archive now has {len(combined)} draws saved to {storage.location_label()}"
     )
 
 

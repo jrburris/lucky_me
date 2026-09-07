@@ -40,9 +40,10 @@ def common_combinations(
 ) -> list[tuple[tuple[int, ...], int, str, float]]:
     """Which groups of `size` numbers appeared together in the same draw most often.
 
-    Returns (combo, count, last_seen, hours_since_seen) tuples, where
-    last_seen is the drawTime of the most recent draw containing that combo
-    and hours_since_seen is how long ago that was relative to now.
+    Returns (combo, count, last_seen, hours_since_seen) tuples, sorted by
+    count descending and then hours_since_seen descending. last_seen is the
+    drawTime of the most recent draw containing that combo and
+    hours_since_seen is how long ago that was relative to now.
 
     Cost grows combinatorially with both `size` and the number of draws
     (each draw contributes C(20, size) combinations), so this can get slow
@@ -58,15 +59,17 @@ def common_combinations(
             last_seen[combo] = draw_time
 
     now = datetime.now()
-    return [
+    rows = [
         (
             combo,
             count,
             last_seen[combo],
             round((now - datetime.fromisoformat(last_seen[combo])).total_seconds() / 3600, 1),
         )
-        for combo, count in counts.most_common(top_n)
+        for combo, count in counts.items()
     ]
+    rows.sort(key=lambda row: (row[1], row[3]), reverse=True)
+    return rows[:top_n]
 
 
 def backtest_pick(
