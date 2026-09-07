@@ -19,18 +19,18 @@ def _date(value: str) -> datetime.date:
 
 def cmd_fetch(args: argparse.Namespace) -> None:
     already_have = storage.existing_ids(args.date)
-    if already_have:
-        print(f"{args.date.isoformat()} already has {len(already_have)} run(s) archived — skipping.")
+    df = collector.fetch_day(args.date)
+    missing = df[~df["id"].isin(already_have)]
+
+    if already_have and missing.empty:
+        print(f"{args.date.isoformat()} is already fully collected ({len(already_have)} runs), nothing to fetch.")
     else:
-        df = collector.fetch_day(args.date)
-        if df.empty:
-            print(f"No draws returned for {args.date.isoformat()}.")
-        else:
-            combined = storage.save_draws(df)
-            print(
-                f"Added {len(df)} run(s) for {args.date.isoformat()}. "
-                f"Archive now has {len(combined)} draws saved to {storage.location_label()}"
-            )
+        combined = storage.save_draws(df)
+        print(
+            f"Added {len(missing)} new run(s) for {args.date.isoformat()} "
+            f"({len(already_have)} were already collected). "
+            f"Archive now has {len(combined)} draws saved to {storage.location_label()}"
+        )
 
     pruned = storage.prune_older_than()
     if pruned:
