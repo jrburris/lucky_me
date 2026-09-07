@@ -3,6 +3,7 @@ fetch / analyze / backtest functions from the keno package."""
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -26,6 +27,16 @@ def _common_combinations(size: int, top_n: int):
 
 def _refresh():
     st.cache_data.clear()
+
+
+def _fetch_and_save(day: date) -> tuple[int, int]:
+    """Fetch a single day and save any missing runs. Returns (added, already_had)."""
+    already_have = storage.existing_ids(day)
+    new_df = collector.fetch_day(day)
+    missing = new_df[~new_df["id"].isin(already_have)]
+    if not missing.empty:
+        storage.save_draws(new_df)
+    return len(missing), len(already_have)
 
 
 with st.sidebar:
@@ -57,32 +68,74 @@ with tab_data:
         col3.download_button(
             "Download archive CSV", export_df.to_csv(index=False), file_name="draws.csv", mime="text/csv"
         )
-        st.dataframe(df, use_container_width=True, height=500)
+
+        PAGE_SIZE = 100
+        sorted_df = df.sort_values("drawTime", ascending=False).reset_index(drop=True)
+        total_pages = max(1, -(-len(sorted_df) // PAGE_SIZE))
+        page = st.number_input("Page", min_value=1, max_value=total_pages, value=1, step=1)
+        start = (page - 1) * PAGE_SIZE
+        end = start + PAGE_SIZE
+        st.caption(
+            f"Showing rows {start + 1}-{min(end, len(sorted_df))} of {len(sorted_df)} "
+            f"(page {page} of {total_pages}, newest first)"
+        )
+        st.dataframe(sorted_df.iloc[start:end], use_container_width=True, height=500)
 
 with tab_fetch:
-    st.write("Pull a day of draws from the Georgia Lottery API and add them to the Google Sheet archive.")
-    day = st.date_input("Date")
-    already_have = storage.existing_ids(day)
+    st.write("Pull draws from the Georgia Lottery API and add them to the Google Sheet archive.")
+    mode = st.radio("Fetch", ["Today", "Date range"], horizontal=True, label_visibility="collapsed")
 
-    if already_have:
-        st.info(f"{len(already_have)} run(s) already archived for {day.isoformat()}.")
+    if mode == "Today":
+        today = date.today()
+        already_have = storage.existing_ids(today)
+        if already_have:
+            st.info(f"{len(already_have)} run(s) already archived for {today.isoformat()}.")
 
-    if st.button("Fetch draws", type="primary"):
-        with st.spinner(f"Fetching {day.isoformat()}..."):
-            try:
-                new_df = collector.fetch_day(day)
-                missing = new_df[~new_df["id"].isin(already_have)]
+        if st.button("Fetch today's draws", type="primary"):
+            with st.spinner(f"Fetching {today.isoformat()}..."):
+                try:
+                    added, had = _fetch_and_save(today)
+                    if added == 0 and had:
+                        st.success(f"{today.isoformat()} is already fully collected — nothing to fetch.")
+                    else:
+                        st.success(f"Added {added} new run(s) for {today.isoformat()}.")
 
-                if already_have and missing.empty:
-                    st.success(f"{day.isoformat()} is already fully collected — nothing to fetch.")
-                else:
-                    combined = storage.save_draws(new_df)
+                    pruned = storage.prune_older_than()
+                    if pruned:
+                        st.info(f"Pruned {pruned} draw(s) older than {storage.DEFAULT_RETENTION_DAYS} days.")
+
                     _refresh()
-                    st.success(
-                        f"Added {len(missing)} new run(s). Archive now has {len(combined)} draws."
-                    )
-            except Exception as exc:
-                st.error(f"Fetch failed: {exc}")
+                except Exception as exc:
+                    st.error(f"Fetch failed: {exc}")
+
+    else:
+        c1, c2 = st.columns(2)
+        start = c1.date_input("Start date", value=date.today())
+        end = c2.date_input("End date", value=date.today())
+        st.caption("Fetches one day at a time (already-collected days are skipped quickly) — a wide range can take a while.")
+
+        if st.button("Fetch range", type="primary", disabled=start > end):
+            if start > end:
+                st.error("Start date must be on or before end date.")
+            else:
+                days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+                progress = st.progress(0.0)
+                total_added = 0
+                try:
+                    for i, day in enumerate(days, start=1):
+                        progress.progress(i / len(days), text=f"Fetching {day.isoformat()} ({i}/{len(days)})...")
+                        added, _ = _fetch_and_save(day)
+                        total_added += added
+                    progress.empty()
+                    st.success(f"Added {total_added} new run(s) across {len(days)} day(s).")
+
+                    pruned = storage.prune_older_than()
+                    if pruned:
+                        st.info(f"Pruned {pruned} draw(s) older than {storage.DEFAULT_RETENTION_DAYS} days.")
+
+                    _refresh()
+                except Exception as exc:
+                    st.error(f"Fetch failed: {exc}")
 
 with tab_analyze:
     df = _load_draws()

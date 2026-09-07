@@ -9,7 +9,7 @@ See README.md for how to set up the service account and share the sheet.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 
 import gspread
@@ -20,6 +20,7 @@ from google.oauth2.service_account import Credentials
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 WORKSHEET_TITLE = "draws"
 HEADERS = ["id", "drawTime", "win", "bulls_eye"]
+DEFAULT_RETENTION_DAYS = 30
 
 
 @lru_cache(maxsize=1)
@@ -90,3 +91,22 @@ def existing_ids(day: date) -> set[str]:
         return set()
     on_day = df["drawTime"].apply(lambda dt: datetime.fromisoformat(dt).date() == day)
     return set(df.loc[on_day, "id"].astype(str))
+
+
+def prune_older_than(days: int = DEFAULT_RETENTION_DAYS) -> int:
+    """Delete archived draws older than `days` days. Returns how many were removed."""
+    df = _read_all()
+    if df.empty:
+        return 0
+
+    cutoff = datetime.now() - timedelta(days=days)
+    is_recent = df["drawTime"].apply(lambda dt: datetime.fromisoformat(dt) >= cutoff)
+    removed = int((~is_recent).sum())
+
+    if removed:
+        kept = df.loc[is_recent]
+        ws = _worksheet()
+        ws.clear()
+        ws.update([HEADERS] + kept.values.tolist(), range_name="A1", value_input_option="RAW")
+
+    return removed

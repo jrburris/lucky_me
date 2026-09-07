@@ -24,14 +24,17 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
     if already_have and missing.empty:
         print(f"{args.date.isoformat()} is already fully collected ({len(already_have)} runs), nothing to fetch.")
-        return
+    else:
+        combined = storage.save_draws(df)
+        print(
+            f"Added {len(missing)} new run(s) for {args.date.isoformat()} "
+            f"({len(already_have)} were already collected). "
+            f"Archive now has {len(combined)} draws saved to {storage.location_label()}"
+        )
 
-    combined = storage.save_draws(df)
-    print(
-        f"Added {len(missing)} new run(s) for {args.date.isoformat()} "
-        f"({len(already_have)} were already collected). "
-        f"Archive now has {len(combined)} draws saved to {storage.location_label()}"
-    )
+    pruned = storage.prune_older_than()
+    if pruned:
+        print(f"Pruned {pruned} draw(s) older than {storage.DEFAULT_RETENTION_DAYS} days.")
 
 
 def cmd_analyze(args: argparse.Namespace) -> None:
