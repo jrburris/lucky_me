@@ -46,6 +46,13 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         f"{analysis.numbers_missing(df, args.lookback)}"
     )
 
+    if args.combos:
+        for size in (4, 7):
+            print(f"\nComputing most common {size}-number combinations "
+                  f"(this can take a while for large archives)...")
+            for combo, count in analysis.common_combinations(df, size, args.top):
+                print(f"  {combo}: {count}")
+
 
 def cmd_backtest(args: argparse.Namespace) -> None:
     df = storage.load_draws()
@@ -65,7 +72,11 @@ def main() -> None:
     analyze_parser = subparsers.add_parser("analyze", help="Summarize frequency across the archive")
     analyze_parser.add_argument("--top", type=int, default=6)
     analyze_parser.add_argument("--lookback", type=int, default=10)
-    analyze_parser.set_defaults(func=cmd_analyze)
+    analyze_parser.add_argument(
+        "--no-combos", dest="combos", action="store_false",
+        help="Skip the 4- and 7-number combination breakdown (slow on large archives)",
+    )
+    analyze_parser.set_defaults(func=cmd_analyze, combos=True)
 
     backtest_parser = subparsers.add_parser("backtest", help="Replay a fixed pick against the archive")
     backtest_parser.add_argument("--picks", type=int, nargs="+", required=True)

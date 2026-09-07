@@ -2,6 +2,7 @@
 fetch / analyze / backtest functions from the keno package."""
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
 from keno import analysis, collector, payouts, storage
@@ -18,8 +19,13 @@ def _load_draws():
     return df if not df.empty else None
 
 
+@st.cache_data
+def _common_combinations(size: int, top_n: int):
+    return analysis.common_combinations(_load_draws(), size, top_n)
+
+
 def _refresh():
-    _load_draws.clear()
+    st.cache_data.clear()
 
 
 tab_data, tab_fetch, tab_analyze, tab_backtest = st.tabs(
@@ -88,6 +94,26 @@ with tab_analyze:
         c2.write(analysis.least_frequent(freq, top_n))
         c3.write(f"**Not drawn in last {lookback}**")
         c3.write(analysis.numbers_missing(df, lookback))
+
+        st.subheader("Common combinations")
+        st.caption(
+            "Groups of numbers that appeared together in the same draw most often. "
+            "The 7-number search is combinatorially heavier and can take a while on "
+            "large archives."
+        )
+        combo_top_n = st.slider("Combos to show", min_value=1, max_value=20, value=10)
+
+        if st.button("Find common combinations"):
+            c1, c2 = st.columns(2)
+            with st.spinner("Counting 4-number combinations..."):
+                combos4 = _common_combinations(4, combo_top_n)
+            c1.write("**Most common 4-number combos**")
+            c1.table(pd.DataFrame(combos4, columns=["numbers", "count"]))
+
+            with st.spinner("Counting 7-number combinations (slower)..."):
+                combos7 = _common_combinations(7, combo_top_n)
+            c2.write("**Most common 7-number combos**")
+            c2.table(pd.DataFrame(combos7, columns=["numbers", "count"]))
 
 with tab_backtest:
     df = _load_draws()

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from itertools import combinations
 
 import pandas as pd
 
@@ -31,6 +32,19 @@ def numbers_missing(df: pd.DataFrame, lookback: int = 10) -> list[int]:
     recent = df.sort_values("drawTime").tail(lookback)
     freq = number_frequency(recent)
     return freq[freq == 0].index.tolist()
+
+
+def common_combinations(df: pd.DataFrame, size: int, top_n: int = 10) -> list[tuple[tuple[int, ...], int]]:
+    """Which groups of `size` numbers appeared together in the same draw most often.
+
+    Cost grows combinatorially with both `size` and the number of draws
+    (each draw contributes C(20, size) combinations), so this can get slow
+    for large archives at size=7 or above.
+    """
+    counts: Counter[tuple[int, ...]] = Counter()
+    for win in df["win"]:
+        counts.update(combinations(sorted(win), size))
+    return counts.most_common(top_n)
 
 
 def backtest_pick(
