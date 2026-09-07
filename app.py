@@ -108,12 +108,12 @@ with tab_analyze:
             with st.spinner("Counting 4-number combinations..."):
                 combos4 = _common_combinations(4, combo_top_n)
             c1.write("**Most common 4-number combos**")
-            c1.table(pd.DataFrame(combos4, columns=["numbers", "count"]))
+            c1.table(pd.DataFrame(combos4, columns=["numbers", "count", "last seen", "hours ago"]))
 
             with st.spinner("Counting 7-number combinations (slower)..."):
                 combos7 = _common_combinations(7, combo_top_n)
             c2.write("**Most common 7-number combos**")
-            c2.table(pd.DataFrame(combos7, columns=["numbers", "count"]))
+            c2.table(pd.DataFrame(combos7, columns=["numbers", "count", "last seen", "hours ago"]))
 
 with tab_backtest:
     df = _load_draws()

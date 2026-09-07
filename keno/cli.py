@@ -50,8 +50,8 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         for size in (4, 7):
             print(f"\nComputing most common {size}-number combinations "
                   f"(this can take a while for large archives)...")
-            for combo, count in analysis.common_combinations(df, size, args.top):
-                print(f"  {combo}: {count}")
+            for combo, count, last_seen, hours_since in analysis.common_combinations(df, size, args.top):
+                print(f"  {combo}: {count} (last seen {last_seen}, {hours_since}h ago)")
 
 
 def cmd_backtest(args: argparse.Namespace) -> None:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime
 from itertools import combinations
 
 import pandas as pd
@@ -34,17 +35,38 @@ def numbers_missing(df: pd.DataFrame, lookback: int = 10) -> list[int]:
     return freq[freq == 0].index.tolist()
 
 
-def common_combinations(df: pd.DataFrame, size: int, top_n: int = 10) -> list[tuple[tuple[int, ...], int]]:
+def common_combinations(
+    df: pd.DataFrame, size: int, top_n: int = 10
+) -> list[tuple[tuple[int, ...], int, str, float]]:
     """Which groups of `size` numbers appeared together in the same draw most often.
+
+    Returns (combo, count, last_seen, hours_since_seen) tuples, where
+    last_seen is the drawTime of the most recent draw containing that combo
+    and hours_since_seen is how long ago that was relative to now.
 
     Cost grows combinatorially with both `size` and the number of draws
     (each draw contributes C(20, size) combinations), so this can get slow
     for large archives at size=7 or above.
     """
     counts: Counter[tuple[int, ...]] = Counter()
-    for win in df["win"]:
-        counts.update(combinations(sorted(win), size))
-    return counts.most_common(top_n)
+    last_seen: dict[tuple[int, ...], str] = {}
+
+    ordered = df.sort_values("drawTime")
+    for win, draw_time in zip(ordered["win"], ordered["drawTime"]):
+        for combo in combinations(sorted(win), size):
+            counts[combo] += 1
+            last_seen[combo] = draw_time
+
+    now = datetime.now()
+    return [
+        (
+            combo,
+            count,
+            last_seen[combo],
+            round((now - datetime.fromisoformat(last_seen[combo])).total_seconds() / 3600, 1),
+        )
+        for combo, count in counts.most_common(top_n)
+    ]
 
 
 def backtest_pick(
