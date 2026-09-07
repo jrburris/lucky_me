@@ -13,6 +13,16 @@ from keno import analysis, collector, payouts, storage
 st.set_page_config(page_title="Keno", layout="wide")
 st.title("Keno")
 
+if "gcp_service_account" not in st.secrets or "gsheets" not in st.secrets:
+    st.error(
+        "Google Sheets credentials are not configured. This app needs "
+        "`[gcp_service_account]` and `[gsheets]` sections in its secrets — "
+        "locally that's `.streamlit/secrets.toml`; on Streamlit Community "
+        "Cloud it's the app's **Settings → Secrets** panel. See README.md "
+        "for the exact format."
+    )
+    st.stop()
+
 
 @st.cache_data
 def _load_draws():
@@ -29,14 +39,19 @@ def _refresh():
     st.cache_data.clear()
 
 
-def _fetch_and_save(day: date) -> tuple[int, int]:
-    """Fetch a single day and save any missing runs. Returns (added, already_had)."""
-    already_have = storage.existing_ids(day)
+def _fetch_and_save(day: date) -> tuple[int, bool]:
+    """Fetch a single day unless it already has data archived.
+
+    Returns (added, skipped) — skipped is True if the day already had any
+    runs archived and was left alone rather than re-fetched.
+    """
+    if storage.existing_ids(day):
+        return 0, True
     new_df = collector.fetch_day(day)
-    missing = new_df[~new_df["id"].isin(already_have)]
-    if not missing.empty:
-        storage.save_draws(new_df)
-    return len(missing), len(already_have)
+    if new_df.empty:
+        return 0, False
+    storage.save_draws(new_df)
+    return len(new_df), False
 
 
 with st.sidebar:
@@ -52,14 +67,12 @@ with st.sidebar:
             st.caption(f"{days[0].isoformat()} → {days[-1].isoformat()}")
 
 
-tab_data, tab_fetch, tab_analyze, tab_backtest = st.tabs(
-    ["Data", "Fetch", "Analyze", "Backtest"]
-)
+tab_data, tab_analyze, tab_backtest = st.tabs(["Data", "Analyze", "Backtest"])
 
 with tab_data:
     df = _load_draws()
     if df is None:
-        st.info("No draws collected yet. Use the Fetch tab to pull some.")
+        st.info("No draws collected yet — use Fetch below.")
     else:
         col1, col2, col3 = st.columns([1, 1, 1])
         col1.metric("Draws", len(df))
@@ -69,36 +82,39 @@ with tab_data:
             "Download archive CSV", export_df.to_csv(index=False), file_name="draws.csv", mime="text/csv"
         )
 
-        PAGE_SIZE = 100
-        sorted_df = df.sort_values("drawTime", ascending=False).reset_index(drop=True)
-        total_pages = max(1, -(-len(sorted_df) // PAGE_SIZE))
-        page = st.number_input("Page", min_value=1, max_value=total_pages, value=1, step=1)
-        start = (page - 1) * PAGE_SIZE
-        end = start + PAGE_SIZE
-        st.caption(
-            f"Showing rows {start + 1}-{min(end, len(sorted_df))} of {len(sorted_df)} "
-            f"(page {page} of {total_pages}, newest first)"
+        summary = (
+            df.assign(day=df["drawTime"].str.slice(0, 10))
+            .groupby("day")
+            .size()
+            .reset_index(name="draws")
+            .sort_values("day", ascending=False)
+            .reset_index(drop=True)
         )
-        st.dataframe(sorted_df.iloc[start:end], use_container_width=True, height=500)
+        st.dataframe(summary, use_container_width=True)
 
-with tab_fetch:
-    st.write("Pull draws from the Georgia Lottery API and add them to the Google Sheet archive.")
+    st.divider()
+    st.subheader("Fetch")
+    st.caption(
+        f"Pulls draws from the Georgia Lottery API into the Google Sheet archive. "
+        f"A day already holding any archived runs is skipped, not re-fetched. Data "
+        f"older than {storage.DEFAULT_RETENTION_DAYS} days is purged after every fetch."
+    )
     mode = st.radio("Fetch", ["Today", "Date range"], horizontal=True, label_visibility="collapsed")
 
     if mode == "Today":
         today = date.today()
         already_have = storage.existing_ids(today)
         if already_have:
-            st.info(f"{len(already_have)} run(s) already archived for {today.isoformat()}.")
+            st.info(f"{today.isoformat()} already has {len(already_have)} run(s) archived — will be skipped.")
 
         if st.button("Fetch today's draws", type="primary"):
             with st.spinner(f"Fetching {today.isoformat()}..."):
                 try:
-                    added, had = _fetch_and_save(today)
-                    if added == 0 and had:
-                        st.success(f"{today.isoformat()} is already fully collected — nothing to fetch.")
+                    added, skipped = _fetch_and_save(today)
+                    if skipped:
+                        st.success(f"{today.isoformat()} already ran — skipped.")
                     else:
-                        st.success(f"Added {added} new run(s) for {today.isoformat()}.")
+                        st.success(f"Added {added} run(s) for {today.isoformat()}.")
 
                     pruned = storage.prune_older_than()
                     if pruned:
@@ -112,7 +128,7 @@ with tab_fetch:
         c1, c2 = st.columns(2)
         start = c1.date_input("Start date", value=date.today())
         end = c2.date_input("End date", value=date.today())
-        st.caption("Fetches one day at a time (already-collected days are skipped quickly) — a wide range can take a while.")
+        st.caption("Days that already have archived data are skipped without calling the API.")
 
         if st.button("Fetch range", type="primary", disabled=start > end):
             if start > end:
@@ -121,13 +137,18 @@ with tab_fetch:
                 days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
                 progress = st.progress(0.0)
                 total_added = 0
+                total_skipped = 0
                 try:
                     for i, day in enumerate(days, start=1):
-                        progress.progress(i / len(days), text=f"Fetching {day.isoformat()} ({i}/{len(days)})...")
-                        added, _ = _fetch_and_save(day)
+                        progress.progress(i / len(days), text=f"Checking {day.isoformat()} ({i}/{len(days)})...")
+                        added, skipped = _fetch_and_save(day)
                         total_added += added
+                        total_skipped += int(skipped)
                     progress.empty()
-                    st.success(f"Added {total_added} new run(s) across {len(days)} day(s).")
+                    st.success(
+                        f"Added {total_added} run(s); skipped {total_skipped} already-collected "
+                        f"day(s) (of {len(days)} checked)."
+                    )
 
                     pruned = storage.prune_older_than()
                     if pruned:
@@ -140,7 +161,7 @@ with tab_fetch:
 with tab_analyze:
     df = _load_draws()
     if df is None:
-        st.info("No draws collected yet. Use the Fetch tab to pull some.")
+        st.info("No draws collected yet. Use the Fetch section on the Data tab to pull some.")
     else:
         c1, c2 = st.columns(2)
         top_n = c1.slider("Top N", min_value=1, max_value=20, value=6)
@@ -199,7 +220,7 @@ with tab_analyze:
 with tab_backtest:
     df = _load_draws()
     if df is None:
-        st.info("No draws collected yet. Use the Fetch tab to pull some.")
+        st.info("No draws collected yet. Use the Fetch section on the Data tab to pull some.")
     else:
         picks = st.multiselect(
             "Numbers to play (1-80)", options=list(range(1, 81)), max_selections=10

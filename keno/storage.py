@@ -20,7 +20,7 @@ from google.oauth2.service_account import Credentials
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 WORKSHEET_TITLE = "draws"
 HEADERS = ["id", "drawTime", "win", "bulls_eye"]
-DEFAULT_RETENTION_DAYS = 30
+DEFAULT_RETENTION_DAYS = 32
 
 
 @lru_cache(maxsize=1)
