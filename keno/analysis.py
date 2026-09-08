@@ -1,6 +1,7 @@
 """Frequency analysis and pick backtesting over a Keno draw archive."""
 from __future__ import annotations
 
+import math
 from collections import Counter
 from datetime import datetime
 from itertools import combinations
@@ -20,6 +21,13 @@ def number_frequency(df: pd.DataFrame) -> pd.Series:
     return pd.Series({n: counts.get(n, 0) for n in NUMBER_RANGE}, name="count")
 
 
+def bullseye_frequency(df: pd.DataFrame) -> pd.Series:
+    """Count how often each number 1-80 was the bullseye across all draws in df."""
+    bulls_eye = df["bulls_eye"].dropna().astype(int)
+    counts = bulls_eye.value_counts()
+    return pd.Series({n: int(counts.get(n, 0)) for n in NUMBER_RANGE}, name="count")
+
+
 def most_frequent(freq: pd.Series, n: int = 6) -> list[int]:
     return freq.sort_values(ascending=False).head(n).index.tolist()
 
@@ -33,6 +41,53 @@ def numbers_missing(df: pd.DataFrame, lookback: int = 10) -> list[int]:
     recent = df.sort_values("drawTime").tail(lookback)
     freq = number_frequency(recent)
     return freq[freq == 0].index.tolist()
+
+
+def number_zscores(freq: pd.Series, picks_per_draw: int = 20) -> pd.Series:
+    """Per-number z-score against the count expected from pure random draws.
+
+    `picks_per_draw` is how many of the 80 numbers each draw selects (20 for
+    the main numbers, 1 for the bullseye) — it's the only thing that differs
+    between the two, since expected count per number is always
+    freq.sum() / 80 regardless of picks_per_draw.
+    """
+    total = freq.sum()
+    expected = total / 80
+    p = picks_per_draw / 80
+    variance = expected * (1 - p)
+    std = math.sqrt(variance) if variance > 0 else 1.0
+    return (freq - expected) / std
+
+
+def frequency_significance(freq: pd.Series, picks_per_draw: int = 20) -> dict:
+    """Chi-square goodness-of-fit against uniform random draws, in plain terms.
+
+    Rather than pull in scipy for a single test, this uses the standard
+    large-df normal approximation for the chi-square distribution
+    (mean = dof, std = sqrt(2*dof)) to give a rough verdict: a chi-square
+    statistic within about 2 standard deviations of its expected value (the
+    degrees of freedom) is what pure randomness looks like.
+    """
+    expected = freq.sum() / 80
+    dof = len(freq) - 1
+    chi2 = float(((freq - expected) ** 2 / expected).sum())
+    std = math.sqrt(2 * dof)
+    z = (chi2 - dof) / std
+    verdict = "notably non-uniform" if z > 2 else "consistent with random draws"
+    return {"chi2": chi2, "dof": dof, "expected_per_number": expected, "z": z, "verdict": verdict}
+
+
+def hourly_draw_counts(df: pd.DataFrame) -> pd.Series:
+    """Number of draws by hour of day (0-23) across all days in df."""
+    hours = pd.to_datetime(df["drawTime"]).dt.hour
+    return hours.value_counts().reindex(range(24), fill_value=0).sort_index()
+
+
+def filter_since(df: pd.DataFrame, cutoff: datetime | None) -> pd.DataFrame:
+    """Restrict to draws at or after cutoff. Returns df unchanged if cutoff is None."""
+    if cutoff is None:
+        return df
+    return df[pd.to_datetime(df["drawTime"]) >= cutoff]
 
 
 def common_combinations(

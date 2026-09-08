@@ -3,12 +3,24 @@ fetch / analyze / backtest functions from the keno package."""
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import streamlit as st
 
 from keno import analysis, collector, payouts, storage
+
+FILTER_WINDOWS: dict[str, timedelta | None] = {
+    "Last 30 minutes": timedelta(minutes=30),
+    "Last day": timedelta(days=1),
+    "Last week": timedelta(days=7),
+    "All data": None,
+}
+
+
+def _cutoff_for(window_label: str) -> datetime | None:
+    window = FILTER_WINDOWS[window_label]
+    return None if window is None else datetime.now() - window
 
 st.set_page_config(page_title="Keno", layout="wide")
 st.title("Keno")
@@ -31,8 +43,9 @@ def _load_draws():
 
 
 @st.cache_data
-def _common_combinations(size: int, top_n: int):
-    return analysis.common_combinations(_load_draws(), size, top_n)
+def _common_combinations(size: int, top_n: int, window_label: str):
+    df = analysis.filter_since(_load_draws(), _cutoff_for(window_label))
+    return analysis.common_combinations(df, size, top_n)
 
 
 def _refresh():
@@ -159,59 +172,111 @@ with tab_analyze:
     if df is None:
         st.info("No draws collected yet. Use the Fetch section on the Data tab to pull some.")
     else:
-        c1, c2 = st.columns(2)
-        top_n = c1.slider("Top N", min_value=1, max_value=20, value=6)
-        if len(df) < 2:
-            lookback = len(df)
-            c2.caption(f"Lookback draws: {lookback} (need at least 2 draws for a slider)")
+        window_label = st.selectbox("Time range", list(FILTER_WINDOWS.keys()), index=3)
+        filtered = analysis.filter_since(df, _cutoff_for(window_label))
+        st.caption(f"{len(filtered)} draw(s) in range (of {len(df)} total in archive).")
+
+        if filtered.empty:
+            st.warning("No draws in this time range — try a wider range, or fetch more recent data.")
         else:
-            lookback = c2.slider(
-                "Lookback draws", min_value=1, max_value=min(50, len(df)), value=min(10, len(df))
+            c1, c2 = st.columns(2)
+            top_n = c1.slider("Top N", min_value=1, max_value=20, value=6)
+            if len(filtered) < 2:
+                lookback = len(filtered)
+                c2.caption(f"Lookback draws: {lookback} (need at least 2 draws for a slider)")
+            else:
+                lookback = c2.slider(
+                    "Lookback draws", min_value=1, max_value=min(50, len(filtered)), value=min(10, len(filtered))
+                )
+
+            freq = analysis.number_frequency(filtered)
+            sig = analysis.frequency_significance(freq, picks_per_draw=20)
+            zscores = analysis.number_zscores(freq, picks_per_draw=20)
+
+            st.subheader("Number frequency")
+            st.caption("Positional heatmap (1-80, left to right, top to bottom)")
+            grid = pd.DataFrame(
+                freq.values.reshape(8, 10),
+                index=[f"{r * 10 + 1}-{r * 10 + 10}" for r in range(8)],
+                columns=[str(c + 1) for c in range(10)],
+            )
+            st.dataframe(
+                grid.style.background_gradient(cmap="YlOrRd", axis=None),
+                use_container_width=True,
+            )
+            st.caption(
+                f"Chi-square vs. random: {sig['chi2']:.1f} (expected ≈{sig['dof']}) — {sig['verdict']}. "
+                "The z-scores below aren't corrected for checking 80 numbers at once, so "
+                "treat anything under ~2.5 as noise, not a real pattern."
             )
 
-        freq = analysis.number_frequency(df)
+            c1, c2, c3 = st.columns(3)
+            most = analysis.most_frequent(freq, top_n)
+            least = analysis.least_frequent(freq, top_n)
+            c1.write("**Most frequent**")
+            c1.dataframe(
+                pd.DataFrame({"number": most, "count": freq[most].values, "z": zscores[most].round(2).values}),
+                hide_index=True,
+            )
+            c2.write("**Least frequent**")
+            c2.dataframe(
+                pd.DataFrame({"number": least, "count": freq[least].values, "z": zscores[least].round(2).values}),
+                hide_index=True,
+            )
+            c3.write(f"**Not drawn in last {lookback}**")
+            c3.write(analysis.numbers_missing(filtered, lookback))
 
-        st.subheader("Number frequency")
-        st.bar_chart(freq)
-
-        st.caption("Positional heatmap (1-80, left to right, top to bottom)")
-        grid = pd.DataFrame(
-            freq.values.reshape(8, 10),
-            index=[f"{r * 10 + 1}-{r * 10 + 10}" for r in range(8)],
-            columns=[str(c + 1) for c in range(10)],
-        )
-        st.dataframe(
-            grid.style.background_gradient(cmap="YlOrRd", axis=None),
-            use_container_width=True,
-        )
-
-        c1, c2, c3 = st.columns(3)
-        c1.write("**Most frequent**")
-        c1.write(analysis.most_frequent(freq, top_n))
-        c2.write("**Least frequent**")
-        c2.write(analysis.least_frequent(freq, top_n))
-        c3.write(f"**Not drawn in last {lookback}**")
-        c3.write(analysis.numbers_missing(df, lookback))
-
-        st.subheader("Common combinations")
-        st.caption(
-            "Groups of numbers that appeared together in the same draw most often. "
-            "The 7-number search is combinatorially heavier and can take a while on "
-            "large archives."
-        )
-        combo_top_n = st.slider("Combos to show", min_value=1, max_value=20, value=10)
-
-        if st.button("Find common combinations"):
+            st.subheader("Bullseye frequency")
+            be_freq = analysis.bullseye_frequency(filtered)
+            be_sig = analysis.frequency_significance(be_freq, picks_per_draw=1)
+            be_z = analysis.number_zscores(be_freq, picks_per_draw=1)
+            st.caption(
+                f"Chi-square vs. random: {be_sig['chi2']:.1f} (expected ≈{be_sig['dof']}) — {be_sig['verdict']}."
+            )
             c1, c2 = st.columns(2)
-            with st.spinner("Counting 4-number combinations..."):
-                combos4 = _common_combinations(4, combo_top_n)
-            c1.write("**Most common 4-number combos**")
-            c1.table(pd.DataFrame(combos4, columns=["numbers", "count", "last seen", "hours ago"]))
+            be_most = analysis.most_frequent(be_freq, top_n)
+            be_least = analysis.least_frequent(be_freq, top_n)
+            c1.write("**Most frequent bullseye**")
+            c1.dataframe(
+                pd.DataFrame(
+                    {"number": be_most, "count": be_freq[be_most].values, "z": be_z[be_most].round(2).values}
+                ),
+                hide_index=True,
+            )
+            c2.write("**Least frequent bullseye**")
+            c2.dataframe(
+                pd.DataFrame(
+                    {"number": be_least, "count": be_freq[be_least].values, "z": be_z[be_least].round(2).values}
+                ),
+                hide_index=True,
+            )
 
-            with st.spinner("Counting 7-number combinations (slower)..."):
-                combos7 = _common_combinations(7, combo_top_n)
-            c2.write("**Most common 7-number combos**")
-            c2.table(pd.DataFrame(combos7, columns=["numbers", "count", "last seen", "hours ago"]))
+            st.subheader("Draws by hour of day")
+            st.caption(
+                "The dip reflects GA Keno's daily maintenance window (~75 minutes) — "
+                "the exact start time varies day to day rather than being fixed."
+            )
+            st.bar_chart(analysis.hourly_draw_counts(filtered))
+
+            st.subheader("Common combinations")
+            st.caption(
+                "Groups of numbers that appeared together in the same draw most often. "
+                "The 7-number search is combinatorially heavier and can take a while on "
+                "large archives."
+            )
+            combo_top_n = st.slider("Combos to show", min_value=1, max_value=20, value=10)
+
+            if st.button("Find common combinations"):
+                c1, c2 = st.columns(2)
+                with st.spinner("Counting 4-number combinations..."):
+                    combos4 = _common_combinations(4, combo_top_n, window_label)
+                c1.write("**Most common 4-number combos**")
+                c1.table(pd.DataFrame(combos4, columns=["numbers", "count", "last seen", "hours ago"]))
+
+                with st.spinner("Counting 7-number combinations (slower)..."):
+                    combos7 = _common_combinations(7, combo_top_n, window_label)
+                c2.write("**Most common 7-number combos**")
+                c2.table(pd.DataFrame(combos7, columns=["numbers", "count", "last seen", "hours ago"]))
 
 with tab_backtest:
     df = _load_draws()
